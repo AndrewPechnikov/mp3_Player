@@ -99,8 +99,6 @@ void App_Open_Next_Song(void)
 		return;
 	}
 
-	printf("Loading track: %s\r\n", playlist[current_song_index]);
-
 	App_FatFs_Lock();
 	fres = f_open(&fil, playlist[current_song_index], FA_READ);
 	App_FatFs_Unlock();

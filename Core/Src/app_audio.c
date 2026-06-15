@@ -10,6 +10,23 @@ extern osSemaphoreId_t dmaSemHandle;
 
 static uint32_t current_freq = 0;
 
+/*
+ * HAL_I2S_Init() ставить невірний дільник для цієї плати (звук повільний).
+ * Емпірично вірне значення для I2S2: I2SDIV=16, ODD=0.
+ */
+static void App_Apply_I2S_Prescaler(void)
+{
+	SPI2->I2SPR = 0x0010U;
+}
+
+static void App_Dma_Sync_Reset(void)
+{
+	dma_half_ready = 0;
+	dma_full_ready = 0;
+	while (osSemaphoreAcquire(dmaSemHandle, 0) == osOK) {
+	}
+}
+
 static uint32_t App_Map_Sample_Rate(uint32_t sample_rate)
 {
 	if (sample_rate >= 48000) {
@@ -32,14 +49,13 @@ static void App_Configure_I2S(uint32_t sample_rate)
 		current_freq = sample_rate;
 	}
 
-	printf("Resetting I2S2 configuration...\r\n");
 	HAL_I2S_DeInit(&hi2s2);
 	if (HAL_I2S_Init(&hi2s2) != HAL_OK) {
 		printf("I2S Re-Init Failed!\r\n");
 		Error_Handler();
 	}
 
-	SPI2->I2SPR = 0x0010;
+	App_Apply_I2S_Prescaler();
 }
 
 static int App_Decode_Frame(HMP3Decoder decoder, uint8_t **read_ptr,
@@ -69,24 +85,17 @@ static int App_Decode_Frame(HMP3Decoder decoder, uint8_t **read_ptr,
 
 static void App_Apply_Volume(int16_t *target_pcm, int sample_count)
 {
+	uint16_t volume = adc_volume;
+
 	for (int i = 0; i < sample_count; i++) {
 		int32_t sample = target_pcm[i];
-		target_pcm[i] = (int16_t)((sample * adc_volume) >> 15);
-	}
-}
-
-static void App_Pad_Pcm_Buffer(int16_t *target_pcm, int output_samples)
-{
-	if (output_samples < PCM_HALF_BUF_SIZE) {
-		memset(target_pcm + output_samples, 0,
-				(PCM_HALF_BUF_SIZE - output_samples) * sizeof(int16_t));
+		target_pcm[i] = (int16_t)((sample * volume) >> 15);
 	}
 }
 
 static void App_Refill_Read_Buffer(uint8_t **read_ptr, int *bytes_left)
 {
 	UINT br = 0;
-	uint8_t eof = 0;
 
 	if (*bytes_left >= 2048) {
 		return;
@@ -97,22 +106,24 @@ static void App_Refill_Read_Buffer(uint8_t **read_ptr, int *bytes_left)
 
 	App_FatFs_Lock();
 	f_read(&fil, readBuf + *bytes_left, READ_BUF_SIZE - *bytes_left, &br);
-	eof = f_eof(&fil);
 	App_FatFs_Unlock();
 
 	*bytes_left += br;
-	(void)eof;
 }
 
 static uint8_t App_Is_End_Of_File(int bytes_left)
 {
 	uint8_t eof;
 
+	if (bytes_left >= 200) {
+		return 0;
+	}
+
 	App_FatFs_Lock();
 	eof = f_eof(&fil);
 	App_FatFs_Unlock();
 
-	return eof && bytes_left < 200;
+	return eof != 0;
 }
 
 static void App_Skip_Track(HMP3Decoder decoder)
@@ -122,8 +133,7 @@ static void App_Skip_Track(HMP3Decoder decoder)
 	printf("Skipping track...\r\n");
 
 	HAL_I2S_DMAStop(&hi2s2);
-	dma_half_ready = 0;
-	dma_full_ready = 0;
+	App_Dma_Sync_Reset();
 
 	MP3FreeDecoder(decoder);
 
@@ -152,6 +162,8 @@ static void App_End_Of_Track(HMP3Decoder decoder)
 	printf("End of file. Switching...\r\n");
 
 	HAL_I2S_DMAStop(&hi2s2);
+	App_Dma_Sync_Reset();
+
 	MP3FreeDecoder(decoder);
 
 	App_FatFs_Lock();
@@ -189,21 +201,44 @@ static void App_Preload_Pcm_Buffers(HMP3Decoder decoder, uint8_t **read_ptr,
 static void App_Fill_Dma_Buffer(HMP3Decoder decoder, uint8_t **read_ptr,
 		int *bytes_left, MP3FrameInfo *info)
 {
-	int16_t *target_pcm = dma_half_ready ?
-			pcmBuf : (pcmBuf + PCM_HALF_BUF_SIZE);
+	int16_t *target_pcm;
+	int samples_filled = 0;
+	uint8_t half_ready = dma_half_ready;
+	uint8_t full_ready = dma_full_ready;
 
-	if (!App_Decode_Frame(decoder, read_ptr, bytes_left, target_pcm)) {
-		memset(target_pcm, 0, PCM_HALF_BUF_SIZE * sizeof(int16_t));
+	if (half_ready) {
+		target_pcm = pcmBuf;
+		dma_half_ready = 0;
+	} else if (full_ready) {
+		target_pcm = pcmBuf + PCM_HALF_BUF_SIZE;
+		dma_full_ready = 0;
 	} else {
-		MP3GetLastFrameInfo(decoder, info);
-		App_Apply_Volume(target_pcm, info->outputSamps);
-		App_Pad_Pcm_Buffer(target_pcm, info->outputSamps);
+		return;
 	}
 
-	if (dma_half_ready) {
-		dma_half_ready = 0;
-	} else {
-		dma_full_ready = 0;
+	while (samples_filled < PCM_HALF_BUF_SIZE && *bytes_left > 0) {
+		int16_t *frame_dst = target_pcm + samples_filled;
+
+		if (!App_Decode_Frame(decoder, read_ptr, bytes_left, frame_dst)) {
+			break;
+		}
+
+		MP3GetLastFrameInfo(decoder, info);
+		App_Apply_Volume(frame_dst, info->outputSamps);
+		samples_filled += info->outputSamps;
+	}
+
+	if (samples_filled < PCM_HALF_BUF_SIZE) {
+		memset(target_pcm + samples_filled, 0,
+				(PCM_HALF_BUF_SIZE - samples_filled) * sizeof(int16_t));
+	}
+}
+
+static void App_Service_Dma_Buffers(HMP3Decoder decoder, uint8_t **read_ptr,
+		int *bytes_left, MP3FrameInfo *info)
+{
+	while (dma_half_ready || dma_full_ready) {
+		App_Fill_Dma_Buffer(decoder, read_ptr, bytes_left, info);
 	}
 }
 
@@ -223,19 +258,17 @@ static void App_Playback_Loop(HMP3Decoder decoder, uint8_t *read_ptr,
 			return;
 		}
 
+		if (osSemaphoreAcquire(dmaSemHandle, osWaitForever) != osOK) {
+			continue;
+		}
+
+		App_Service_Dma_Buffers(decoder, &read_ptr, &bytes_left, &info);
+
 		App_Refill_Read_Buffer(&read_ptr, &bytes_left);
 
 		if (App_Is_End_Of_File(bytes_left)) {
 			App_End_Of_Track(decoder);
 			return;
-		}
-
-		if (osSemaphoreAcquire(dmaSemHandle, osWaitForever) != osOK) {
-			continue;
-		}
-
-		if (dma_half_ready || dma_full_ready) {
-			App_Fill_Dma_Buffer(decoder, &read_ptr, &bytes_left, &info);
 		}
 	}
 }
@@ -269,9 +302,7 @@ void App_AudioTask_Run(void)
 				info.bitrate, info.samprate, info.nChans);
 
 		App_Configure_I2S(info.samprate);
-
-		dma_half_ready = 0;
-		dma_full_ready = 0;
+		App_Dma_Sync_Reset();
 
 		printf("Starting I2S DMA...\r\n");
 		HAL_StatusTypeDef dma_status = HAL_I2S_Transmit_DMA(&hi2s2,

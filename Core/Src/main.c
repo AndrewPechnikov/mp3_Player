@@ -169,7 +169,7 @@ int main(void)
 
   /* Create the semaphores(s) */
   /* creation of dmaSem */
-  dmaSemHandle = osSemaphoreNew(1, 1, &dmaSem_attributes);
+  dmaSemHandle = osSemaphoreNew(4, 0, &dmaSem_attributes);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   uiSemHandle = osSemaphoreNew(1, 0, &uiSem_attributes);
