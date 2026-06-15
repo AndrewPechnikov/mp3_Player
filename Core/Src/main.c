@@ -121,6 +121,7 @@ void volume_control();
 void button_control();
 void open_next_song();
 void interface_control();
+void volume_math();
 
 /* USER CODE END PFP */
 
@@ -133,6 +134,7 @@ int _write(int file, char *ptr, int len) {
 }
 #define READ_BUF_SIZE 4096
 #define PCM_BUF_SIZE  (1152 * 2 * 2)
+#define PCM_HALF_BUF_SIZE  PCM_BUF_SIZE / 2
 
 uint8_t readBuf[READ_BUF_SIZE];
 int16_t pcmBuf[PCM_BUF_SIZE];
@@ -732,6 +734,8 @@ void interface_control(){
 			}
 
 }
+
+
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -832,7 +836,7 @@ void StartAudioTask(void *argument) {
 			readPtr += offset;
 			bytesLeft -= offset;
 			MP3Decode(hMP3Decoder, &readPtr, &bytesLeft,
-					pcmBuf + (PCM_BUF_SIZE / 2), 0);
+					pcmBuf + (PCM_HALF_BUF_SIZE), 0);
 		}
 
 		MP3FrameInfo info;
@@ -942,7 +946,7 @@ void StartAudioTask(void *argument) {
 				if (dma_half_ready || dma_full_ready) {
 					int16_t *target_pcm =
 							dma_half_ready ?
-									pcmBuf : (pcmBuf + PCM_BUF_SIZE / 2);
+									pcmBuf : (pcmBuf + PCM_HALF_BUF_SIZE);
 					int frame_decoded = 0;
 
 					while (!frame_decoded && bytesLeft > 0) {
@@ -960,16 +964,17 @@ void StartAudioTask(void *argument) {
 								// === НОВА МАТЕМАТИКА ГУЧНОСТІ ===
 								for (int i = 0; i < info.outputSamps; i++) {
 									int32_t sample = target_pcm[i];
-									// Спочатку застосовуємо потенціометр (масштаб 0-4095)
-									sample = (sample * adc_volume) / 4095;
-									// Далі обмежуємо максимальну гучність (твоя умова / 8)
-									target_pcm[i] = (int16_t) (sample / 8);
+									target_pcm[i] = (int16_t)((sample * adc_volume) >> 15);
 								}
+
+
+
+
 								// ================================
 
-								if (info.outputSamps < (PCM_BUF_SIZE / 2)) {
+								if (info.outputSamps < (PCM_HALF_BUF_SIZE)) {
 									memset(target_pcm + info.outputSamps, 0,
-											((PCM_BUF_SIZE / 2)
+											((PCM_HALF_BUF_SIZE)
 													- info.outputSamps)
 													* sizeof(int16_t));
 								}
@@ -985,7 +990,7 @@ void StartAudioTask(void *argument) {
 
 					if (!frame_decoded) {
 						memset(target_pcm, 0,
-								(PCM_BUF_SIZE / 2) * sizeof(int16_t));
+								(PCM_HALF_BUF_SIZE) * sizeof(int16_t));
 					}
 
 					if (dma_half_ready)
