@@ -15,9 +15,11 @@
 #define MULTICLICK_TIMEOUT  400
 #define CMD_QUEUE_LEN       8
 
-#define READ_BUF_SIZE       4096
-#define PCM_BUF_SIZE        (1152 * 2 * 2)
-#define PCM_HALF_BUF_SIZE   (PCM_BUF_SIZE / 2)
+
+#define READ_BUF_SIZE  4096
+#define PCM_HALF_BUF_SIZE 2304
+#define PCM_BUF_SIZE (PCM_HALF_BUF_SIZE * 2)
+
 
 /* Shared player state (protected by appMutex) */
 extern char playlist[MAX_SONGS][80];

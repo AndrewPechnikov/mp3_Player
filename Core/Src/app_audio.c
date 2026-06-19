@@ -104,18 +104,24 @@ static void App_Apply_Volume(int16_t *target_pcm, int sample_count)
 static void App_Refill_Read_Buffer(uint8_t **read_ptr, int *bytes_left)
 {
 	UINT br = 0;
-
-	if (*bytes_left >= 2048) {
+	uint8_t *end_of_data = *read_ptr + *bytes_left;
+	int space_at_end = (readBuf + READ_BUF_SIZE) - end_of_data;
+	if (space_at_end >= 2048) {
+		App_Lock();
+		f_read(&fil, end_of_data, space_at_end, &br);
+		App_Unlock();
+		*bytes_left += br;
 		return;
 	}
-
+	if (*bytes_left >= (READ_BUF_SIZE / 2)) {
+		return;
+	}
 	memmove(readBuf, *read_ptr, *bytes_left);
 	*read_ptr = readBuf;
-
+	int bytes_to_read = READ_BUF_SIZE - *bytes_left;
 	App_Lock();
-	f_read(&fil, readBuf + *bytes_left, READ_BUF_SIZE - *bytes_left, &br);
+	f_read(&fil, readBuf + *bytes_left, bytes_to_read, &br);
 	App_Unlock();
-
 	*bytes_left += br;
 }
 
