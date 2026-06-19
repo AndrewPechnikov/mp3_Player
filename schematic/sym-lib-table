@@ -1,0 +1,6 @@
+(sym_lib_table
+	(version 7)
+	(lib (name "pcmModule") (type "KiCad") (uri "${KIPRJMOD}/Kicad-STM32-master/Symbols/pcmModule.kicad_sym") (options "") (descr ""))
+	(lib (name "MH-SD") (type "KiCad") (uri "${KIPRJMOD}/zynthian-miniature-main/libraries/MH-SD.kicad_sym") (options "") (descr ""))
+	(lib (name "OLED_0.96") (type "KiCad") (uri "${KIPRJMOD}/zynthian-miniature-main/libraries/OLED_0.96.kicad_sym") (options "") (descr ""))
+)

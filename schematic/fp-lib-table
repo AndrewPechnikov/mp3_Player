@@ -1,0 +1,6 @@
+(fp_lib_table
+	(version 7)
+	(lib (name "pills") (type "KiCad") (uri "${KIPRJMOD}/pills.pretty") (options "") (descr ""))
+	(lib (name "pills") (type "KiCad") (uri "${KIPRJMOD}/pills.pretty") (options "") (descr ""))
+	(lib (name "PCM") (type "KiCad") (uri "${KIPRJMOD}/PCM.pretty") (options "") (descr ""))
+)

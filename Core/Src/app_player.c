@@ -1,3 +1,8 @@
+/**
+ * @file app_player.c
+ * @brief Global player state, playlist/FS logic, and defaultTask init/loop.
+ */
+
 #include "app_player.h"
 #include "app_sync.h"
 #include "main.h"
@@ -10,11 +15,8 @@ int total_songs = 0;
 int current_song_index = 0;
 volatile uint8_t file_opened = 0;
 volatile uint16_t adc_volume = 4095;
-volatile uint8_t skip_track = 0;
-volatile int8_t track_direction = 1;
 volatile uint8_t is_paused = 0;
 uint8_t force_ui_update = 0;
-uint8_t pending_resume = 0;
 int window_start = 0;
 
 FATFS fs;
@@ -26,11 +28,12 @@ int16_t pcmBuf[PCM_BUF_SIZE];
 volatile uint8_t dma_half_ready = 0;
 volatile uint8_t dma_full_ready = 0;
 
+/** Mount FatFS volume on SD card. */
 void App_FS_Init(void)
 {
-	App_FatFs_Lock();
+	App_Lock();
 	fres = f_mount(&fs, "", 1);
-	App_FatFs_Unlock();
+	App_Unlock();
 
 	if (fres != FR_OK) {
 		printf("Mount error: %d\r\n", fres);
@@ -38,24 +41,25 @@ void App_FS_Init(void)
 	}
 }
 
+/** Build playlist from .mp3 files in the given path. */
 FRESULT App_ScanFiles(char *path)
 {
 	FRESULT res;
 	DIR dir;
 	FILINFO fno;
 
-	App_FatFs_Lock();
+	App_Lock();
 	res = f_opendir(&dir, path);
-	App_FatFs_Unlock();
+	App_Unlock();
 
 	if (res != FR_OK) {
 		return res;
 	}
 
 	while (1) {
-		App_FatFs_Lock();
+		App_Lock();
 		res = f_readdir(&dir, &fno);
-		App_FatFs_Unlock();
+		App_Unlock();
 
 		if (res != FR_OK || fno.fname[0] == 0) {
 			break;
@@ -79,31 +83,30 @@ FRESULT App_ScanFiles(char *path)
 		total_songs++;
 	}
 
-	App_FatFs_Lock();
+	App_Lock();
 	f_closedir(&dir);
-	App_FatFs_Unlock();
+	App_Unlock();
 	return res;
 }
 
+/** Open next track when audio closed the previous file. */
 void App_Open_Next_Song(void)
 {
 	uint8_t opened;
 	uint8_t ui_pending;
 
-	App_Player_Lock();
+	App_Lock();
 	opened = file_opened;
 	ui_pending = force_ui_update;
-	App_Player_Unlock();
+	App_Unlock();
 
 	if (opened != 0 || total_songs == 0 || ui_pending != 0) {
 		return;
 	}
 
-	printf("Loading track: %s\r\n", playlist[current_song_index]);
-
-	App_FatFs_Lock();
+	App_Lock();
 	fres = f_open(&fil, playlist[current_song_index], FA_READ);
-	App_FatFs_Unlock();
+	App_Unlock();
 
 	if (fres == FR_OK) {
 		App_UI_RequestUpdate();
@@ -112,18 +115,17 @@ void App_Open_Next_Song(void)
 
 	printf("Error %d: Cannot open file. Skipping track...\r\n", fres);
 
-	App_Player_Lock();
-	current_song_index += track_direction;
+	App_Lock();
+	current_song_index++;
 	if (current_song_index >= total_songs) {
 		current_song_index = 0;
-	} else if (current_song_index < 0) {
-		current_song_index = total_songs - 1;
 	}
-	App_Player_Unlock();
+	App_Unlock();
 
 	osDelay(100);
 }
 
+/** Initialize display, scan SD card, and open the first track. */
 void App_DefaultTask_Init(void)
 {
 	App_Display_Init();
@@ -140,9 +142,9 @@ void App_DefaultTask_Init(void)
 
 	printf("Found %d songs. Preparing UI and opening file...\r\n", total_songs);
 
-	App_FatFs_Lock();
+	App_Lock();
 	fres = f_open(&fil, playlist[current_song_index], FA_READ);
-	App_FatFs_Unlock();
+	App_Unlock();
 
 	if (fres != FR_OK) {
 		printf("File open error: %d\r\n", fres);
@@ -153,12 +155,12 @@ void App_DefaultTask_Init(void)
 	App_UI_RequestUpdate();
 }
 
+/** Poll inputs, open files, refresh UI, small delay. */
 void App_DefaultTask_Loop(void)
 {
 	App_Volume_Poll();
 	App_Button_Poll();
 	App_Open_Next_Song();
-
-	(void)osSemaphoreAcquire(uiSemHandle, APP_UI_POLL_MS);
 	App_UI_Update();
+	osDelay(10);
 }

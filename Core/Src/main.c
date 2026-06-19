@@ -74,21 +74,13 @@ const osSemaphoreAttr_t dmaSem_attributes = {
   .name = "dmaSem"
 };
 /* USER CODE BEGIN PV */
-osMutexId_t playerMutexHandle;
-const osMutexAttr_t playerMutex_attributes = {
-  .name = "playerMutex"
+osMutexId_t appMutexHandle;
+const osMutexAttr_t appMutex_attributes = {
+  .name = "appMutex"
 };
-osMutexId_t fatfsMutexHandle;
-const osMutexAttr_t fatfsMutex_attributes = {
-  .name = "fatfsMutex"
-};
-osSemaphoreId_t uiSemHandle;
-const osSemaphoreAttr_t uiSem_attributes = {
-  .name = "uiSem"
-};
-osSemaphoreId_t fileReadySemHandle;
-const osSemaphoreAttr_t fileReadySem_attributes = {
-  .name = "fileReadySem"
+osMessageQueueId_t cmdQueueHandle;
+const osMessageQueueAttr_t cmdQueue_attributes = {
+  .name = "cmdQueue"
 };
 /* USER CODE END PV */
 
@@ -163,17 +155,15 @@ int main(void)
   osKernelInitialize();
 
   /* USER CODE BEGIN RTOS_MUTEX */
-  playerMutexHandle = osMutexNew(&playerMutex_attributes);
-  fatfsMutexHandle = osMutexNew(&fatfsMutex_attributes);
+  appMutexHandle = osMutexNew(&appMutex_attributes);
   /* USER CODE END RTOS_MUTEX */
 
   /* Create the semaphores(s) */
   /* creation of dmaSem */
-  dmaSemHandle = osSemaphoreNew(1, 1, &dmaSem_attributes);
+  dmaSemHandle = osSemaphoreNew(4, 0, &dmaSem_attributes);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
-  uiSemHandle = osSemaphoreNew(1, 0, &uiSem_attributes);
-  fileReadySemHandle = osSemaphoreNew(1, 0, &fileReadySem_attributes);
+  /* (only dmaSem is created above) */
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
@@ -181,7 +171,8 @@ int main(void)
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
+  cmdQueueHandle = osMessageQueueNew(CMD_QUEUE_LEN, sizeof(PlayerCmd_t),
+      &cmdQueue_attributes);
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
