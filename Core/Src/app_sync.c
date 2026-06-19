@@ -1,38 +1,39 @@
+/**
+ * @file app_sync.c
+ * @brief Wrappers for appMutex and cmdQueue.
+ */
+
 #include "app_sync.h"
 #include "app_player.h"
 
-void App_Player_Lock(void)
+/** Lock appMutex. */
+void App_Lock(void)
 {
-	osMutexAcquire(playerMutexHandle, osWaitForever);
+	osMutexAcquire(appMutexHandle, osWaitForever);
 }
 
-void App_Player_Unlock(void)
+/** Unlock appMutex. */
+void App_Unlock(void)
 {
-	osMutexRelease(playerMutexHandle);
+	osMutexRelease(appMutexHandle);
 }
 
-void App_FatFs_Lock(void)
+/** Post a player command to cmdQueue (non-blocking). */
+void App_SendCmd(PlayerCmd_t cmd)
 {
-	osMutexAcquire(fatfsMutexHandle, osWaitForever);
+	(void)osMessageQueuePut(cmdQueueHandle, &cmd, 0, 0);
 }
 
-void App_FatFs_Unlock(void)
+/** Wait for a player command from cmdQueue. */
+osStatus_t App_WaitCmd(PlayerCmd_t *cmd, uint32_t timeout_ms)
 {
-	osMutexRelease(fatfsMutexHandle);
+	return osMessageQueueGet(cmdQueueHandle, cmd, NULL, timeout_ms);
 }
 
+/** Set force_ui_update under appMutex. */
 void App_UI_RequestUpdate(void)
 {
+	App_Lock();
 	force_ui_update = 1;
-	osSemaphoreRelease(uiSemHandle);
-}
-
-void App_FileReady_Signal(void)
-{
-	osSemaphoreRelease(fileReadySemHandle);
-}
-
-void App_FileReady_Wait(void)
-{
-	osSemaphoreAcquire(fileReadySemHandle, osWaitForever);
+	App_Unlock();
 }

@@ -1,3 +1,8 @@
+/**
+ * @file app_audio.c
+ * @brief MP3 decode, I2S/DMA playback, volume scaling, and track transitions.
+ */
+
 #include "app_player.h"
 #include "app_sync.h"
 #include "main.h"
@@ -10,15 +15,13 @@ extern osSemaphoreId_t dmaSemHandle;
 
 static uint32_t current_freq = 0;
 
-/*
- * HAL_I2S_Init() ставить невірний дільник для цієї плати (звук повільний).
- * Емпірично вірне значення для I2S2: I2SDIV=16, ODD=0.
- */
+/** Override I2SPR; HAL prescaler is wrong on this board (I2SDIV=16, ODD=0). */
 static void App_Apply_I2S_Prescaler(void)
 {
 	SPI2->I2SPR = 0x0010U;
 }
 
+/** Clear DMA ready flags and drain pending dmaSem tokens. */
 static void App_Dma_Sync_Reset(void)
 {
 	dma_half_ready = 0;
@@ -27,6 +30,7 @@ static void App_Dma_Sync_Reset(void)
 	}
 }
 
+/** Map MP3 sample rate to nearest HAL I2S_AUDIOFREQ constant. */
 static uint32_t App_Map_Sample_Rate(uint32_t sample_rate)
 {
 	if (sample_rate >= 48000) {
@@ -41,6 +45,7 @@ static uint32_t App_Map_Sample_Rate(uint32_t sample_rate)
 	return I2S_AUDIOFREQ_44K;
 }
 
+/** Re-init I2S for the track sample rate and apply board prescaler fix. */
 static void App_Configure_I2S(uint32_t sample_rate)
 {
 	if (sample_rate != current_freq) {
@@ -58,6 +63,7 @@ static void App_Configure_I2S(uint32_t sample_rate)
 	App_Apply_I2S_Prescaler();
 }
 
+/** Decode one MP3 frame into target_pcm; return 1 on success. */
 static int App_Decode_Frame(HMP3Decoder decoder, uint8_t **read_ptr,
 		int *bytes_left, int16_t *target_pcm)
 {
@@ -83,6 +89,7 @@ static int App_Decode_Frame(HMP3Decoder decoder, uint8_t **read_ptr,
 	return 0;
 }
 
+/** Scale PCM samples by adc_volume (0..4095). */
 static void App_Apply_Volume(int16_t *target_pcm, int sample_count)
 {
 	uint16_t volume = adc_volume;
@@ -93,6 +100,7 @@ static void App_Apply_Volume(int16_t *target_pcm, int sample_count)
 	}
 }
 
+/** Read more MP3 data from SD when the parse buffer runs low. */
 static void App_Refill_Read_Buffer(uint8_t **read_ptr, int *bytes_left)
 {
 	UINT br = 0;
@@ -104,13 +112,14 @@ static void App_Refill_Read_Buffer(uint8_t **read_ptr, int *bytes_left)
 	memmove(readBuf, *read_ptr, *bytes_left);
 	*read_ptr = readBuf;
 
-	App_FatFs_Lock();
+	App_Lock();
 	f_read(&fil, readBuf + *bytes_left, READ_BUF_SIZE - *bytes_left, &br);
-	App_FatFs_Unlock();
+	App_Unlock();
 
 	*bytes_left += br;
 }
 
+/** Return 1 if file EOF and remaining MP3 bytes are exhausted. */
 static uint8_t App_Is_End_Of_File(int bytes_left)
 {
 	uint8_t eof;
@@ -119,30 +128,22 @@ static uint8_t App_Is_End_Of_File(int bytes_left)
 		return 0;
 	}
 
-	App_FatFs_Lock();
+	App_Lock();
 	eof = f_eof(&fil);
-	App_FatFs_Unlock();
+	App_Unlock();
 
 	return eof != 0;
 }
 
-static void App_Skip_Track(HMP3Decoder decoder)
+/** Stop DMA, close file, advance index; UI task opens the next file. */
+static void App_Stop_And_Advance(int8_t direction)
 {
-	int8_t direction;
-
-	printf("Skipping track...\r\n");
-
 	HAL_I2S_DMAStop(&hi2s2);
 	App_Dma_Sync_Reset();
 
-	MP3FreeDecoder(decoder);
-
-	App_FatFs_Lock();
+	App_Lock();
 	f_close(&fil);
-	App_FatFs_Unlock();
 
-	App_Player_Lock();
-	direction = track_direction;
 	current_song_index += direction;
 	if (current_song_index >= total_songs) {
 		current_song_index = 0;
@@ -150,35 +151,14 @@ static void App_Skip_Track(HMP3Decoder decoder)
 	if (current_song_index < 0) {
 		current_song_index = total_songs - 1;
 	}
-	skip_track = 0;
+
 	file_opened = 0;
-	App_Player_Unlock();
+	App_Unlock();
 
 	osDelay(200);
 }
 
-static void App_End_Of_Track(HMP3Decoder decoder)
-{
-	printf("End of file. Switching...\r\n");
-
-	HAL_I2S_DMAStop(&hi2s2);
-	App_Dma_Sync_Reset();
-
-	MP3FreeDecoder(decoder);
-
-	App_FatFs_Lock();
-	f_close(&fil);
-	App_FatFs_Unlock();
-
-	App_Player_Lock();
-	current_song_index++;
-	if (current_song_index >= total_songs) {
-		current_song_index = 0;
-	}
-	file_opened = 0;
-	App_Player_Unlock();
-}
-
+/** Decode initial MP3 frames into both PCM half-buffers before DMA start. */
 static void App_Preload_Pcm_Buffers(HMP3Decoder decoder, uint8_t **read_ptr,
 		int *bytes_left)
 {
@@ -198,6 +178,7 @@ static void App_Preload_Pcm_Buffers(HMP3Decoder decoder, uint8_t **read_ptr,
 	}
 }
 
+/** Fill one DMA half-buffer with decoded (and volume-scaled) PCM. */
 static void App_Fill_Dma_Buffer(HMP3Decoder decoder, uint8_t **read_ptr,
 		int *bytes_left, MP3FrameInfo *info)
 {
@@ -234,6 +215,7 @@ static void App_Fill_Dma_Buffer(HMP3Decoder decoder, uint8_t **read_ptr,
 	}
 }
 
+/** Process all pending DMA half/full complete events in one pass. */
 static void App_Service_Dma_Buffers(HMP3Decoder decoder, uint8_t **read_ptr,
 		int *bytes_left, MP3FrameInfo *info)
 {
@@ -242,20 +224,44 @@ static void App_Service_Dma_Buffers(HMP3Decoder decoder, uint8_t **read_ptr,
 	}
 }
 
+/** Handle one command from cmdQueue; return 1 to exit playback loop. */
+static uint8_t App_Handle_Cmd(PlayerCmd_t cmd, HMP3Decoder decoder)
+{
+	switch (cmd) {
+	case PLAYER_CMD_PAUSE:
+		HAL_I2S_DMAPause(&hi2s2);
+		break;
+	case PLAYER_CMD_RESUME:
+		HAL_I2S_DMAResume(&hi2s2);
+		break;
+	case PLAYER_CMD_NEXT:
+		printf("Skipping track...\r\n");
+		MP3FreeDecoder(decoder);
+		App_Stop_And_Advance(1);
+		return 1;
+	case PLAYER_CMD_PREV:
+		printf("Skipping track...\r\n");
+		MP3FreeDecoder(decoder);
+		App_Stop_And_Advance(-1);
+		return 1;
+	default:
+		break;
+	}
+	return 0;
+}
+
+/** Main decode loop: wait for DMA, refill buffers, handle commands/EOF. */
 static void App_Playback_Loop(HMP3Decoder decoder, uint8_t *read_ptr,
 		int bytes_left)
 {
 	MP3FrameInfo info;
-	uint8_t should_skip;
+	PlayerCmd_t cmd;
 
 	while (1) {
-		App_Player_Lock();
-		should_skip = skip_track;
-		App_Player_Unlock();
-
-		if (should_skip) {
-			App_Skip_Track(decoder);
-			return;
+		while (App_WaitCmd(&cmd, 0) == osOK) {
+			if (App_Handle_Cmd(cmd, decoder)) {
+				return;
+			}
 		}
 
 		if (osSemaphoreAcquire(dmaSemHandle, osWaitForever) != osOK) {
@@ -263,20 +269,29 @@ static void App_Playback_Loop(HMP3Decoder decoder, uint8_t *read_ptr,
 		}
 
 		App_Service_Dma_Buffers(decoder, &read_ptr, &bytes_left, &info);
-
 		App_Refill_Read_Buffer(&read_ptr, &bytes_left);
 
 		if (App_Is_End_Of_File(bytes_left)) {
-			App_End_Of_Track(decoder);
+			printf("End of file. Switching...\r\n");
+			MP3FreeDecoder(decoder);
+			App_Stop_And_Advance(1);
 			return;
 		}
 	}
 }
 
+/** AudioTask entry: wait for START, decode, and stream PCM over I2S DMA. */
 void App_AudioTask_Run(void)
 {
+	PlayerCmd_t cmd;
+
 	for (;;) {
-		App_FileReady_Wait();
+		/* Block until UI opens a file and sends START. */
+		do {
+			if (App_WaitCmd(&cmd, osWaitForever) != osOK) {
+				continue;
+			}
+		} while (cmd != PLAYER_CMD_START);
 
 		HMP3Decoder decoder = MP3InitDecoder();
 		if (!decoder) {
@@ -288,9 +303,9 @@ void App_AudioTask_Run(void)
 		int bytes_left = 0;
 		UINT bytes_read = 0;
 
-		App_FatFs_Lock();
+		App_Lock();
 		f_read(&fil, readBuf, READ_BUF_SIZE, &bytes_read);
-		App_FatFs_Unlock();
+		App_Unlock();
 		bytes_left = bytes_read;
 
 		printf("Pre-loading buffers...\r\n");
@@ -316,6 +331,7 @@ void App_AudioTask_Run(void)
 	}
 }
 
+/** DMA half-transfer complete: first PCM half is free to fill. */
 void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
 {
 	(void)hi2s;
@@ -323,6 +339,7 @@ void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
 	osSemaphoreRelease(dmaSemHandle);
 }
 
+/** DMA transfer complete: second PCM half is free to fill. */
 void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s)
 {
 	(void)hi2s;
